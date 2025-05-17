@@ -126,6 +126,16 @@ logs/server.log   # FastAPI server logs
 
 Unit and E2E tests are recommended under a future `tests/` directory.
 
+### Go prototype
+
+An early Go implementation lives in `golang/`. Build and test it with:
+
+```bash
+cd golang
+go test ./... -cover
+go build .
+```
+
 
 ---
 
