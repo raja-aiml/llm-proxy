@@ -1,12 +1,14 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"io"
 	"log"
 	"net/http"
+	"time"
+
+	"llmwrapper-go/config"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,7 +24,6 @@ type ModelConfig struct {
 	} `yaml:"model"`
 	SystemPrompt string `yaml:"system_prompt"`
 }
-
 type ModelData struct {
 	ID      string `json:"id"`
 	Created int64  `json:"created"`
@@ -32,6 +33,7 @@ type ModelList struct {
 	Data []ModelData `json:"data"`
 }
 
+var configs map[string]config.ModelConfig
 var configs map[string]ModelConfig
 
 func loadConfigs(dir string) map[string]ModelConfig {
@@ -121,6 +123,14 @@ func chatCompletionHandler(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
+func main() {
+	configs = config.LoadAllConfigs()
+	http.HandleFunc("/health", healthHandler)
+	http.HandleFunc("/v1/models", modelsHandler)
+	http.HandleFunc("/v1/chat/completions", chatCompletionHandler)
+	log.Println("starting server on :8000")
+	log.Fatal(http.ListenAndServe(":8000", nil))
+}
 func newServer(addr, cfgDir string) *http.Server {
 	configs = loadConfigs(cfgDir)
 	mux := http.NewServeMux()
