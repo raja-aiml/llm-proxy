@@ -1,0 +1,19 @@
+version: '3'
+
+vars:
+  devbox_path: $HOME/.devbox/bin
+
+tasks:
+  default:
+    desc: Initialize the project using Devbox
+    dir: local
+    cmds:
+      - |
+        echo "Setting up the project..."
+        if ! command -v devbox &> /dev/null; then
+          echo "Installing Devbox..."
+          curl -fsSL https://get.jetify.com/devbox | bash
+          export PATH="{{.devbox_path}}:$PATH"
+        fi
+      - devbox install
+      - devbox run install

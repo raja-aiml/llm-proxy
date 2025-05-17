@@ -1,0 +1,8 @@
+version: '3'
+
+includes:
+  setup: local/tasks/setup.yml
+  test:  local/tasks/test.yml
+  run:   local/tasks/run.yml
+  docker: local/tasks/docker.yml
+  clean: local/tasks/clean.yml

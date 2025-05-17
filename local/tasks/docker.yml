@@ -1,0 +1,17 @@
+version: '3'
+
+vars:
+  image: llm-wrapper-server
+  env_file: .env
+  port: 8000
+
+tasks:
+  build:
+    desc: Build the Docker image
+    cmds:
+      - docker build -t {{.image}} .
+
+  run:
+    desc: Run the Docker container
+    cmds:
+      - docker run --rm --name {{.image}} --env-file {{.env_file}} -p {{.port}}:{{.port}} {{.image}}

@@ -1,0 +1,23 @@
+version: '3'
+
+vars:
+  script: ./local/scripts/run_python.sh
+  cov_dir: .build
+  coverage_file: "{{.cov_dir}}/.coverage"
+
+tasks:
+  unit:
+    desc: Run the unit test suite
+    cmds:
+      - "{{.script}} pytest tests/unit --maxfail=1"
+
+  unit:coverage:
+    desc: Run the unit test suite with coverage
+    cmds:
+      - mkdir -p {{.cov_dir}}
+      - COVERAGE_FILE={{.coverage_file}} {{.script}} pytest tests/unit --maxfail=1 -q --disable-warnings --cov=src --cov-report=term-missing
+
+  integration:
+    desc: Run the integration test suite
+    cmds:
+      - "{{.script}} pytest tests/integration --maxfail=1 -q"

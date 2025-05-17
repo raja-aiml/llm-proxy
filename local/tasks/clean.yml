@@ -1,0 +1,27 @@
+version: '3'
+
+vars:
+  build_artifacts: "build .build .coverage dist"
+  venvs: ".venv local/.venv local/.devbox"
+  logs: "logs/*.log"
+
+tasks:
+  pycache:
+    desc: Delete all __pycache__ folders
+    cmds:
+      - find . -type d -name "__pycache__" -exec rm -r {} +
+      - rm -fr .pytest_cache
+
+  build:
+    desc: Delete build artifacts
+    cmds:
+      - rm -rf {{.build_artifacts}}
+
+  all:
+    desc: Delete all artifacts
+    cmds:
+      - rm -rf {{.build_artifacts}}
+      - find . -type d -name "__pycache__" -exec rm -r {} +
+      - rm -fr .pytest_cache
+      - rm -rf {{.venvs}}
+      - rm -rf {{.logs}}

@@ -1,0 +1,16 @@
+# src/configs/expert.yaml
+
+api:
+  url: "<oinference_engine_url>"
+
+model:
+  path: "<model_path>"
+
+system_prompt: |
+  <system_prompt>
+
+parameters:
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 40
+  stream: true

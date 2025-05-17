@@ -1,0 +1,35 @@
+version: '3'
+
+vars:
+  script: ./local/scripts/run_python.sh
+  host: 0.0.0.0
+  port: 8000
+  app: llm_wrapper.server.main:app
+  cli: src/llm_wrapper/client/cli.py
+  base_url: http://localhost:{{.port}}
+
+tasks:
+  server:
+    desc: Run the FastAPI server via Uvicorn
+    cmds:
+      - "{{.script}} uvicorn {{.app}} --host {{.host}} --port {{.port}} --reload"
+
+  client:
+    desc: Run the CLI client in default (streaming) mode
+    cmds:
+      - '{{.script}} python {{.cli}} --query "Explain BGP?" --no-stream'
+
+  client:interactive:
+    desc: Run the interactive CLI chat interface
+    cmds:
+      - '{{.script}} python {{.cli}}'
+
+  models:
+    desc: Show available models
+    cmds:
+      - curl -s {{.base_url}}/v1/models | jq
+
+  health:
+    desc: Ping server health endpoint
+    cmds:
+      - curl -s {{.base_url}}/health | jq

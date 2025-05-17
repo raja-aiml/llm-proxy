@@ -1,0 +1,21 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.14.2/.schema/devbox.schema.json",
+  "packages": [
+    "go@1.24.2",
+    "python@3.13",
+    "uv"
+  ],
+  "shell": {
+    "init_hook": [
+      "[ -n \"$GOPROXY\" ] && unset GOPROXY",
+      "echo 'Welcome to devbox!' > /dev/null"
+    ],
+    "scripts": {
+      "install": [
+        "sh -c 'cd $(git rev-parse --show-toplevel) && go install github.com/go-task/task/v3/cmd/task@latest'",
+        "sh -c 'cd $(git rev-parse --show-toplevel) && uv venv && uv sync'",
+        "sh -c 'cd $(git rev-parse --show-toplevel) && uv pip install -e .\"[dev]\"'"
+      ]
+    }
+  }
+}
