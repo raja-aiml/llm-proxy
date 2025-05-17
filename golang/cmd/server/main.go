@@ -9,16 +9,16 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 type Parameters struct {
-	Temperature float64
-	TopP        float64
-	TopK        int
-	Stream      bool
+	Temperature float64 `yaml:"temperature"`
+	TopP        float64 `yaml:"top_p"`
+	TopK        int     `yaml:"top_k"`
+	Stream      bool    `yaml:"stream"`
 }
 
 type ModelConfig struct {
@@ -28,8 +28,8 @@ type ModelConfig struct {
 	Model struct {
 		Path string `yaml:"path"`
 	} `yaml:"model"`
-	SystemPrompt string `yaml:"system_prompt"`
-	Parameters   Parameters
+	SystemPrompt string     `yaml:"system_prompt"`
+	Parameters   Parameters `yaml:"parameters"`
 }
 
 type ModelData struct {
@@ -55,58 +55,32 @@ func loadConfigs(dir string) map[string]ModelConfig {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
-		mc := parseSimpleYAML(path)
+		mc, err := parseYAML(path)
+		if err != nil {
+			log.Printf("failed to parse config %s: %v", path, err)
+			continue
+		}
 		id := e.Name()[:len(e.Name())-len(filepath.Ext(e.Name()))]
 		cfgs[id] = mc
 	}
 	return cfgs
 }
 
-// parseSimpleYAML parses a very small subset of YAML used in the sample configs
-// without requiring any external dependencies. This is not a full YAML parser
-// and only supports the specific structure found in the repository's config
-// files.
-func parseSimpleYAML(path string) ModelConfig {
-	file, err := os.Open(path)
-	if err != nil {
-		return ModelConfig{}
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
+// parseYAML parses a YAML config file and returns a ModelConfig
+func parseYAML(path string) (ModelConfig, error) {
 	var cfg ModelConfig
-	section := ""
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if strings.HasSuffix(line, ":") {
-			section = strings.TrimSuffix(line, ":")
-			continue
-		}
-		if section == "api" && strings.HasPrefix(line, "url:") {
-			cfg.API.URL = strings.TrimSpace(strings.TrimPrefix(line, "url:"))
-		} else if section == "model" && strings.HasPrefix(line, "path:") {
-			cfg.Model.Path = strings.TrimSpace(strings.TrimPrefix(line, "path:"))
-		} else if strings.HasPrefix(line, "system_prompt:") {
-			cfg.SystemPrompt = strings.TrimSpace(strings.TrimPrefix(line, "system_prompt:"))
-		} else if section == "parameters" {
-			if strings.HasPrefix(line, "temperature:") {
-				if v, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimPrefix(line, "temperature:")), 64); err == nil {
-					cfg.Parameters.Temperature = v
-				}
-			} else if strings.HasPrefix(line, "top_p:") {
-				if v, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimPrefix(line, "top_p:")), 64); err == nil {
-					cfg.Parameters.TopP = v
-				}
-			} else if strings.HasPrefix(line, "top_k:") {
-				if v, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "top_k:"))); err == nil {
-					cfg.Parameters.TopK = v
-				}
-			} else if strings.HasPrefix(line, "stream:") {
-				cfg.Parameters.Stream = strings.TrimSpace(strings.TrimPrefix(line, "stream:")) == "true"
-			}
-		}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ModelConfig{}, err
 	}
-	return cfg
+
+	err = yaml.Unmarshal(data, &cfg)
+	if err != nil {
+		return ModelConfig{}, err
+	}
+
+	return cfg, nil
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
