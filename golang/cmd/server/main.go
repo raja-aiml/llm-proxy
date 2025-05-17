@@ -9,9 +9,17 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
+
+type Parameters struct {
+	Temperature float64
+	TopP        float64
+	TopK        int
+	Stream      bool
+}
 
 type ModelConfig struct {
 	API struct {
@@ -21,6 +29,7 @@ type ModelConfig struct {
 		Path string `yaml:"path"`
 	} `yaml:"model"`
 	SystemPrompt string `yaml:"system_prompt"`
+	Parameters   Parameters
 }
 
 type ModelData struct {
@@ -30,15 +39,6 @@ type ModelData struct {
 
 type ModelList struct {
 	Data []ModelData `json:"data"`
-}
-
-const defaultConfigDir = "../src/llm_wrapper/configs"
-
-func getConfigDir() string {
-	if dir := os.Getenv("CONFIG_DIR"); dir != "" {
-		return dir
-	}
-	return defaultConfigDir
 }
 
 var configs map[string]ModelConfig
@@ -56,21 +56,19 @@ func loadConfigs(dir string) map[string]ModelConfig {
 		}
 		path := filepath.Join(dir, e.Name())
 		mc := parseSimpleYAML(path)
-		if mc.API.URL == "" && mc.Model.Path == "" {
-			log.Println("warning: empty or invalid config", path)
-			continue
-		}
 		id := e.Name()[:len(e.Name())-len(filepath.Ext(e.Name()))]
 		cfgs[id] = mc
 	}
 	return cfgs
 }
 
-// parseSimpleYAML parses a minimal YAML config file.
+// parseSimpleYAML parses a very small subset of YAML used in the sample configs
+// without requiring any external dependencies. This is not a full YAML parser
+// and only supports the specific structure found in the repository's config
+// files.
 func parseSimpleYAML(path string) ModelConfig {
 	file, err := os.Open(path)
 	if err != nil {
-		log.Println("unable to open config", path, "-", err)
 		return ModelConfig{}
 	}
 	defer file.Close()
@@ -90,21 +88,32 @@ func parseSimpleYAML(path string) ModelConfig {
 			cfg.Model.Path = strings.TrimSpace(strings.TrimPrefix(line, "path:"))
 		} else if strings.HasPrefix(line, "system_prompt:") {
 			cfg.SystemPrompt = strings.TrimSpace(strings.TrimPrefix(line, "system_prompt:"))
+		} else if section == "parameters" {
+			if strings.HasPrefix(line, "temperature:") {
+				if v, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimPrefix(line, "temperature:")), 64); err == nil {
+					cfg.Parameters.Temperature = v
+				}
+			} else if strings.HasPrefix(line, "top_p:") {
+				if v, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimPrefix(line, "top_p:")), 64); err == nil {
+					cfg.Parameters.TopP = v
+				}
+			} else if strings.HasPrefix(line, "top_k:") {
+				if v, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "top_k:"))); err == nil {
+					cfg.Parameters.TopK = v
+				}
+			} else if strings.HasPrefix(line, "stream:") {
+				cfg.Parameters.Stream = strings.TrimSpace(strings.TrimPrefix(line, "stream:")) == "true"
+			}
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		log.Println("error reading", path, "-", err)
 	}
 	return cfg
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 func modelsHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
 	list := ModelList{Data: []ModelData{}}
 	for id := range configs {
 		list.Data = append(list.Data, ModelData{ID: id, Created: time.Now().Unix()})
@@ -113,7 +122,6 @@ func modelsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func chatCompletionHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
 	var req map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -126,51 +134,50 @@ func chatCompletionHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body, _ := json.Marshal(req)
-	resp, err := http.Post(cfg.API.URL, "application/json", bytes.NewReader(body))
+	upstreamReq, err := http.NewRequest("POST", cfg.API.URL, bytes.NewReader(body))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	upstreamReq.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(upstreamReq)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
-	w.WriteHeader(resp.StatusCode)
-	if _, err := io.Copy(w, resp.Body); err != nil {
-		log.Println("proxy response copy error:", err)
+
+	if stream, _ := req["stream"].(bool); stream {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("X-Accel-Buffering", "no")
+		w.WriteHeader(http.StatusOK)
+		flusher, ok := w.(http.Flusher)
+		reader := bufio.NewReader(resp.Body)
+		for {
+			line, err := reader.ReadBytes('\n')
+			if len(line) > 0 {
+				w.Write(line)
+				if ok {
+					flusher.Flush()
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+	} else {
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
 	}
 }
-
-func newServer(addr, cfgDir string) *http.Server {
-	configs = loadConfigs(cfgDir)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", healthHandler)
-	mux.HandleFunc("/v1/models", modelsHandler)
-	mux.HandleFunc("/v1/chat/completions", chatCompletionHandler)
-	return &http.Server{Addr: addr, Handler: mux}
-}
-
-// listenAndServe is a package-level var for test mocking
-var listenAndServe = func(addr string, h http.Handler) error {
-	return http.ListenAndServe(addr, h)
-}
-
-func run(addr, cfgDir string) error {
-	srv := newServer(addr, cfgDir)
-	log.Println("starting server on " + addr)
-	return listenAndServe(srv.Addr, srv.Handler)
-}
-
-// runFn allows tests to override the default run
-var runFn = run
 
 func main() {
-	addr := ":8000"
-	if p := os.Getenv("PORT"); p != "" {
-		if strings.HasPrefix(p, ":") {
-			addr = p
-		} else {
-			addr = ":" + p
-		}
-	}
-	if err := runFn(addr, getConfigDir()); err != nil {
-		log.Fatal(err)
-	}
+	configs = loadConfigs("../src/llm_wrapper/configs")
+	http.HandleFunc("/health", healthHandler)
+	http.HandleFunc("/v1/models", modelsHandler)
+	http.HandleFunc("/v1/chat/completions", chatCompletionHandler)
+	log.Println("starting server on :8000")
+	log.Fatal(http.ListenAndServe(":8000", nil))
 }
