@@ -1,19 +1,25 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"io"
 	"log"
 	"net/http"
-	"time"
-
-	"llmwrapper-go/config"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
+
+type Parameters struct {
+	Temperature float64
+	TopP        float64
+	TopK        int
+	Stream      bool
+}
 
 type ModelConfig struct {
 	API struct {
@@ -23,7 +29,9 @@ type ModelConfig struct {
 		Path string `yaml:"path"`
 	} `yaml:"model"`
 	SystemPrompt string `yaml:"system_prompt"`
+	Parameters   Parameters
 }
+
 type ModelData struct {
 	ID      string `json:"id"`
 	Created int64  `json:"created"`
@@ -33,7 +41,6 @@ type ModelList struct {
 	Data []ModelData `json:"data"`
 }
 
-var configs map[string]config.ModelConfig
 var configs map[string]ModelConfig
 
 func loadConfigs(dir string) map[string]ModelConfig {
@@ -81,6 +88,22 @@ func parseSimpleYAML(path string) ModelConfig {
 			cfg.Model.Path = strings.TrimSpace(strings.TrimPrefix(line, "path:"))
 		} else if strings.HasPrefix(line, "system_prompt:") {
 			cfg.SystemPrompt = strings.TrimSpace(strings.TrimPrefix(line, "system_prompt:"))
+		} else if section == "parameters" {
+			if strings.HasPrefix(line, "temperature:") {
+				if v, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimPrefix(line, "temperature:")), 64); err == nil {
+					cfg.Parameters.Temperature = v
+				}
+			} else if strings.HasPrefix(line, "top_p:") {
+				if v, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimPrefix(line, "top_p:")), 64); err == nil {
+					cfg.Parameters.TopP = v
+				}
+			} else if strings.HasPrefix(line, "top_k:") {
+				if v, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "top_k:"))); err == nil {
+					cfg.Parameters.TopK = v
+				}
+			} else if strings.HasPrefix(line, "stream:") {
+				cfg.Parameters.Stream = strings.TrimSpace(strings.TrimPrefix(line, "stream:")) == "true"
+			}
 		}
 	}
 	return cfg
@@ -99,7 +122,6 @@ func modelsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func chatCompletionHandler(w http.ResponseWriter, r *http.Request) {
-	// Placeholder implementation - forward request to configured API
 	var req map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -111,51 +133,51 @@ func chatCompletionHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "model not found", http.StatusNotFound)
 		return
 	}
-	// Forward request
 	body, _ := json.Marshal(req)
-	resp, err := http.Post(cfg.API.URL, "application/json", bytes.NewReader(body))
+	upstreamReq, err := http.NewRequest("POST", cfg.API.URL, bytes.NewReader(body))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	upstreamReq.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(upstreamReq)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+
+	if stream, _ := req["stream"].(bool); stream {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("X-Accel-Buffering", "no")
+		w.WriteHeader(http.StatusOK)
+		flusher, ok := w.(http.Flusher)
+		reader := bufio.NewReader(resp.Body)
+		for {
+			line, err := reader.ReadBytes('\n')
+			if len(line) > 0 {
+				w.Write(line)
+				if ok {
+					flusher.Flush()
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+	} else {
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	}
 }
 
 func main() {
-	configs = config.LoadAllConfigs()
+	configs = loadConfigs("../src/llm_wrapper/configs")
 	http.HandleFunc("/health", healthHandler)
 	http.HandleFunc("/v1/models", modelsHandler)
 	http.HandleFunc("/v1/chat/completions", chatCompletionHandler)
 	log.Println("starting server on :8000")
 	log.Fatal(http.ListenAndServe(":8000", nil))
-}
-func newServer(addr, cfgDir string) *http.Server {
-	configs = loadConfigs(cfgDir)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", healthHandler)
-	mux.HandleFunc("/v1/models", modelsHandler)
-	mux.HandleFunc("/v1/chat/completions", chatCompletionHandler)
-	return &http.Server{Addr: addr, Handler: mux}
-}
-
-// listenAndServe is a package level variable so tests can replace it.
-var listenAndServe = func(addr string, h http.Handler) error {
-	return http.ListenAndServe(addr, h)
-}
-
-func run(addr, cfgDir string) error {
-	srv := newServer(addr, cfgDir)
-	log.Println("starting server on " + addr)
-	return listenAndServe(srv.Addr, srv.Handler)
-}
-
-// runFn allows tests to replace the run function used by main.
-var runFn = run
-
-func main() {
-	if err := runFn(":8000", "../src/llm_wrapper/configs"); err != nil {
-		log.Fatal(err)
-	}
 }
