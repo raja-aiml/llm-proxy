@@ -126,6 +126,16 @@ logs/server.log   # FastAPI server logs
 
 Unit and E2E tests are recommended under a future `tests/` directory.
 
+### Go prototype
+
+An early Go implementation lives in `golang/`. Build and test it with:
+
+```bash
+cd golang
+go test ./... -cover
+go build .
+```
+
 
 ---
 
@@ -153,3 +163,28 @@ MIT License. Contributions welcome via pull requests or issues.
 
 * Cache Integration : Hold
 * Prompt versioning : Hold
+
+## 🐹 Go Implementation
+
+A minimal Go port is available under `golang/`. Build the server and CLI with:
+
+```bash
+cd golang
+go build -o llmwrapper-go ./cmd/server
+```
+
+Run the server:
+
+```bash
+./llmwrapper-go
+```
+
+The CLI can be built similarly:
+
+```bash
+go build -o llm-cli ./cmd/cli
+./llm-cli --query "Hello"
+```
+
+This port currently implements basic config loading, health and model endpoints,
+and proxying chat completions with optional streaming.
