@@ -60,6 +60,26 @@ task run:client  --query "Explain BGP?"
 
 ---
 
+## 📝 Go Prototype
+
+An experimental Go server lives in the `golang/` directory.
+
+Build and run it:
+
+```bash
+cd golang
+go build
+./golang
+```
+
+Run the Go tests:
+
+```bash
+go test ./...
+```
+
+---
+
 ## ⚙️ Example Model Config (`src/configs/expert.yaml`)
 
 ```yaml
