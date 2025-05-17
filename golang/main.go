@@ -1,14 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"io"
 	"log"
 	"net/http"
-	"time"
-
-	"llmwrapper-go/config"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +22,7 @@ type ModelConfig struct {
 	} `yaml:"model"`
 	SystemPrompt string `yaml:"system_prompt"`
 }
+
 type ModelData struct {
 	ID      string `json:"id"`
 	Created int64  `json:"created"`
@@ -33,7 +32,15 @@ type ModelList struct {
 	Data []ModelData `json:"data"`
 }
 
-var configs map[string]config.ModelConfig
+const defaultConfigDir = "../src/llm_wrapper/configs"
+
+func getConfigDir() string {
+	if dir := os.Getenv("CONFIG_DIR"); dir != "" {
+		return dir
+	}
+	return defaultConfigDir
+}
+
 var configs map[string]ModelConfig
 
 func loadConfigs(dir string) map[string]ModelConfig {
@@ -49,19 +56,21 @@ func loadConfigs(dir string) map[string]ModelConfig {
 		}
 		path := filepath.Join(dir, e.Name())
 		mc := parseSimpleYAML(path)
+		if mc.API.URL == "" && mc.Model.Path == "" {
+			log.Println("warning: empty or invalid config", path)
+			continue
+		}
 		id := e.Name()[:len(e.Name())-len(filepath.Ext(e.Name()))]
 		cfgs[id] = mc
 	}
 	return cfgs
 }
 
-// parseSimpleYAML parses a very small subset of YAML used in the sample configs
-// without requiring any external dependencies. This is not a full YAML parser
-// and only supports the specific structure found in the repository's config
-// files.
+// parseSimpleYAML parses a minimal YAML config file.
 func parseSimpleYAML(path string) ModelConfig {
 	file, err := os.Open(path)
 	if err != nil {
+		log.Println("unable to open config", path, "-", err)
 		return ModelConfig{}
 	}
 	defer file.Close()
@@ -83,14 +92,19 @@ func parseSimpleYAML(path string) ModelConfig {
 			cfg.SystemPrompt = strings.TrimSpace(strings.TrimPrefix(line, "system_prompt:"))
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		log.Println("error reading", path, "-", err)
+	}
 	return cfg
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 func modelsHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
 	list := ModelList{Data: []ModelData{}}
 	for id := range configs {
 		list.Data = append(list.Data, ModelData{ID: id, Created: time.Now().Unix()})
@@ -99,7 +113,7 @@ func modelsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func chatCompletionHandler(w http.ResponseWriter, r *http.Request) {
-	// Placeholder implementation - forward request to configured API
+	w.Header().Set("Content-Type", "application/json")
 	var req map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -111,7 +125,6 @@ func chatCompletionHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "model not found", http.StatusNotFound)
 		return
 	}
-	// Forward request
 	body, _ := json.Marshal(req)
 	resp, err := http.Post(cfg.API.URL, "application/json", bytes.NewReader(body))
 	if err != nil {
@@ -120,17 +133,11 @@ func chatCompletionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		log.Println("proxy response copy error:", err)
+	}
 }
 
-func main() {
-	configs = config.LoadAllConfigs()
-	http.HandleFunc("/health", healthHandler)
-	http.HandleFunc("/v1/models", modelsHandler)
-	http.HandleFunc("/v1/chat/completions", chatCompletionHandler)
-	log.Println("starting server on :8000")
-	log.Fatal(http.ListenAndServe(":8000", nil))
-}
 func newServer(addr, cfgDir string) *http.Server {
 	configs = loadConfigs(cfgDir)
 	mux := http.NewServeMux()
@@ -140,7 +147,7 @@ func newServer(addr, cfgDir string) *http.Server {
 	return &http.Server{Addr: addr, Handler: mux}
 }
 
-// listenAndServe is a package level variable so tests can replace it.
+// listenAndServe is a package-level var for test mocking
 var listenAndServe = func(addr string, h http.Handler) error {
 	return http.ListenAndServe(addr, h)
 }
@@ -151,11 +158,19 @@ func run(addr, cfgDir string) error {
 	return listenAndServe(srv.Addr, srv.Handler)
 }
 
-// runFn allows tests to replace the run function used by main.
+// runFn allows tests to override the default run
 var runFn = run
 
 func main() {
-	if err := runFn(":8000", "../src/llm_wrapper/configs"); err != nil {
+	addr := ":8000"
+	if p := os.Getenv("PORT"); p != "" {
+		if strings.HasPrefix(p, ":") {
+			addr = p
+		} else {
+			addr = ":" + p
+		}
+	}
+	if err := runFn(addr, getConfigDir()); err != nil {
 		log.Fatal(err)
 	}
 }
