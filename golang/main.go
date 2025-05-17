@@ -148,5 +148,4 @@ func main() {
 	if err := runFn(":8000", "../src/llm_wrapper/configs"); err != nil {
 		log.Fatal(err)
 	}
-
 }
